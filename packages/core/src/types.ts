@@ -139,6 +139,9 @@ export interface GridInstance<TRow = unknown> {
   ): CellCoord;
   updateEditDraft(value: CellValue): EditSession;
   handleTextInput(text: string): EditSession;
+  copySelection(): string;
+  copyRange(range: CellRange): string;
+  pasteText(text: string, target?: CellCoord): CellRange;
   selectCell(row: number, col: number): SelectionModel;
   extendSelection(row: number, col: number): SelectionModel;
   clearSelection(): void;

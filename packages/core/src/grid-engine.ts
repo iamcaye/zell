@@ -1,3 +1,4 @@
+import { getPasteTarget, parseTsv, serializeRangeToTsv } from './clipboard';
 import { createDataSource } from './data-source';
 import { coerceValueByKind, isEditable } from './editing';
 import { GridEventEmitter } from './event-emitter';
@@ -258,6 +259,72 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
     return session;
   };
 
+  const copyRange = (range: CellRange) => {
+    ensureActive();
+    const normalizedRange = normalizeRange(range, state.rowCount, state.columnCount);
+    const raw = serializeRangeToTsv(normalizedRange, getCell);
+    eventEmitter.emit('copy', { range: normalizedRange, raw });
+    return raw;
+  };
+
+  const copySelection = () => {
+    ensureActive();
+    const range =
+      state.selection?.range ??
+      (state.focusedCell
+        ? { start: state.focusedCell, end: state.focusedCell }
+        : { start: { row: 0, col: 0 }, end: { row: 0, col: 0 } });
+
+    return copyRange(range);
+  };
+
+  const pasteText = (text: string, target?: { row: number; col: number }) => {
+    ensureActive();
+    const parsed = parseTsv(text);
+    const start = getPasteTarget(target, state.focusedCell ?? state.selection?.focus ?? null);
+
+    if (parsed.length === 0) {
+      return { start, end: start };
+    }
+
+    for (let rowOffset = 0; rowOffset < parsed.length; rowOffset += 1) {
+      const row = parsed[rowOffset];
+      if (!row) {
+        continue;
+      }
+
+      for (let colOffset = 0; colOffset < row.length; colOffset += 1) {
+        const columnIndex = start.col + colOffset;
+        const column = resolvedOptions.columns[columnIndex];
+        if (!column) {
+          continue;
+        }
+
+        const value = coerceValueByKind(column.kind, row[colOffset]);
+        setCell(start.row + rowOffset, columnIndex, value);
+      }
+    }
+
+    const range = normalizeRange(
+      {
+        start,
+        end: {
+          row: start.row + parsed.length - 1,
+          col: start.col + Math.max(...parsed.map((row) => row.length), 1) - 1
+        }
+      },
+      state.rowCount,
+      state.columnCount
+    );
+
+    const values = parsed.map((row, rowOffset) =>
+      row.map((_, colOffset) => getCell(start.row + rowOffset, start.col + colOffset))
+    );
+    select(range);
+    eventEmitter.emit('paste', { target: start, values, raw: text });
+    return range;
+  };
+
   const setViewport = (viewportHeight: number, scrollTop: number) => {
     ensureActive();
     const nextState = syncViewport({
@@ -316,6 +383,9 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
     handleKeyDown,
     updateEditDraft,
     handleTextInput,
+    copySelection,
+    copyRange,
+    pasteText,
     selectCell,
     extendSelection,
     clearSelection,

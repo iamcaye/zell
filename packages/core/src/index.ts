@@ -1,5 +1,6 @@
 export { getNextCellFromKey } from './navigation';
 export type { GridKey } from './navigation';
+export { getPasteTarget, parseTsv, serializeRangeToTsv, serializeCellValue } from './clipboard';
 export { createDataSource } from './data-source';
 export { coerceValueByKind, isEditable } from './editing';
 export { createGrid, getGridDataSource } from './grid-engine';
