@@ -123,6 +123,20 @@ export interface GridInstance<TRow = unknown> {
   subscribe(listener: () => void): () => void;
   on<K extends GridEventName>(eventName: K, handler: GridEventHandler<K>): () => void;
   setViewport(viewportHeight: number, scrollTop: number): VirtualViewport;
+  handleKeyDown(
+    key:
+      | 'ArrowUp'
+      | 'ArrowDown'
+      | 'ArrowLeft'
+      | 'ArrowRight'
+      | 'Tab'
+      | 'Enter'
+      | 'Home'
+      | 'End'
+      | 'PageUp'
+      | 'PageDown',
+    modifiers?: { shiftKey?: boolean }
+  ): CellCoord;
   select(range: CellRange): SelectionModel;
   focusCell(row: number, col: number): CellCoord;
   startEdit(row: number, col: number, nextValue?: CellValue): EditSession;

@@ -1,5 +1,6 @@
 import { createDataSource } from './data-source';
 import { GridEventEmitter } from './event-emitter';
+import { getNextCellFromKey, type GridKey } from './navigation';
 import { createSelectionModel, normalizeCell, normalizeRange } from './range';
 import { calculateVirtualViewport, createViewport } from './viewport';
 import type {
@@ -83,6 +84,22 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
     }
   };
 
+  const ensureRowVisible = (row: number) => {
+    const rowTop = row * resolvedOptions.rowHeight;
+    const rowBottom = rowTop + resolvedOptions.rowHeight;
+    let nextScrollTop = state.scrollTop;
+
+    if (rowTop < state.scrollTop) {
+      nextScrollTop = rowTop;
+    } else if (rowBottom > state.scrollTop + state.viewportHeight) {
+      nextScrollTop = rowBottom - state.viewportHeight;
+    }
+
+    if (nextScrollTop !== state.scrollTop) {
+      setState(syncViewport({ scrollTop: nextScrollTop }));
+    }
+  };
+
   const focusCell = (row: number, col: number) => {
     ensureActive();
     const previous = state.focusedCell;
@@ -91,6 +108,7 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
       ...state,
       focusedCell: current
     });
+    ensureRowVisible(current.row);
     eventEmitter.emit('focusChange', { previous, current });
     return current;
   };
@@ -192,6 +210,22 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
     return target;
   };
 
+  const handleKeyDown = (key: GridKey, modifiers?: { shiftKey?: boolean }) => {
+    ensureActive();
+    const current = state.focusedCell ?? state.selection?.focus ?? { row: 0, col: 0 };
+    const pageSize = Math.max(1, Math.floor(state.viewportHeight / resolvedOptions.rowHeight));
+    const next = getNextCellFromKey({
+      current,
+      key,
+      rowCount: state.rowCount,
+      columnCount: state.columnCount,
+      pageSize,
+      shiftKey: modifiers?.shiftKey
+    });
+
+    return focusCell(next.row, next.col);
+  };
+
   const use = (plugin: GridPlugin<TRow>) => {
     ensureActive();
     plugin.setup?.(grid);
@@ -208,6 +242,7 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
     },
     on: (eventName, handler) => eventEmitter.on(eventName, handler),
     setViewport,
+    handleKeyDown,
     select,
     focusCell,
     startEdit,

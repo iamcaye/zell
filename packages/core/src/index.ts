@@ -1,3 +1,5 @@
+export { getNextCellFromKey } from './navigation';
+export type { GridKey } from './navigation';
 export { createDataSource } from './data-source';
 export { createGrid, getGridDataSource } from './grid-engine';
 export { createSelectionModel, normalizeRange } from './range';
