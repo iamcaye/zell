@@ -137,6 +137,8 @@ export interface GridInstance<TRow = unknown> {
       | 'PageDown',
     modifiers?: { shiftKey?: boolean }
   ): CellCoord;
+  updateEditDraft(value: CellValue): EditSession;
+  handleTextInput(text: string): EditSession;
   selectCell(row: number, col: number): SelectionModel;
   extendSelection(row: number, col: number): SelectionModel;
   clearSelection(): void;

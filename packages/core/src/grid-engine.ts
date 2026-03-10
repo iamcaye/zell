@@ -1,4 +1,5 @@
 import { createDataSource } from './data-source';
+import { coerceValueByKind, isEditable } from './editing';
 import { GridEventEmitter } from './event-emitter';
 import { getNextCellFromKey, type GridKey } from './navigation';
 import { createSelectionModel, normalizeCell, normalizeRange } from './range';
@@ -179,11 +180,16 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
   const startEdit = (row: number, col: number, nextValue?: CellValue): EditSession => {
     ensureActive();
     const cell = focusCell(row, col);
-    const currentValue = nextValue ?? getCell(cell.row, cell.col);
+    const column = resolvedOptions.columns[cell.col];
+    if (!isEditable(column, resolvedOptions.editable)) {
+      throw new Error(`Cell ${cell.row}:${cell.col} is not editable`);
+    }
+
+    const currentValue = getCell(cell.row, cell.col);
     const editSession: EditSession = {
       cell,
-      initialValue: getCell(cell.row, cell.col),
-      draftValue: currentValue,
+      initialValue: currentValue,
+      draftValue: nextValue ?? currentValue,
       startedAt: Date.now()
     };
 
@@ -196,6 +202,23 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
     return editSession;
   };
 
+  const updateEditDraft = (value: CellValue) => {
+    ensureActive();
+    if (!state.editSession) {
+      throw new Error('Cannot update edit draft without an active edit session');
+    }
+
+    const editSession: EditSession = {
+      ...state.editSession,
+      draftValue: value
+    };
+    setState({
+      ...state,
+      editSession
+    });
+    return editSession;
+  };
+
   const stopEdit = (mode: 'commit' | 'cancel' = 'commit', nextValue?: CellValue) => {
     ensureActive();
     if (!state.editSession) {
@@ -203,12 +226,15 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
     }
 
     const session = state.editSession;
-    if (mode === 'commit' && nextValue !== undefined) {
-      setCell(session.cell.row, session.cell.col, nextValue);
+    if (mode === 'commit') {
+      const value = nextValue ?? session.draftValue;
+      const column = resolvedOptions.columns[session.cell.col];
+      const coercedValue = coerceValueByKind(column?.kind, value);
+      setCell(session.cell.row, session.cell.col, coercedValue);
       eventEmitter.emit('cellEditCommit', {
         cell: session.cell,
         previousValue: session.initialValue,
-        value: nextValue
+        value: coercedValue
       });
     }
 
@@ -223,6 +249,13 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
       ...state,
       editSession: null
     });
+  };
+
+  const handleTextInput = (text: string) => {
+    ensureActive();
+    const target = state.focusedCell ?? state.selection?.focus ?? { row: 0, col: 0 };
+    const session = startEdit(target.row, target.col, text);
+    return session;
   };
 
   const setViewport = (viewportHeight: number, scrollTop: number) => {
@@ -281,6 +314,8 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
     on: (eventName, handler) => eventEmitter.on(eventName, handler),
     setViewport,
     handleKeyDown,
+    updateEditDraft,
+    handleTextInput,
     selectCell,
     extendSelection,
     clearSelection,

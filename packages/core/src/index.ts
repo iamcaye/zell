@@ -1,6 +1,7 @@
 export { getNextCellFromKey } from './navigation';
 export type { GridKey } from './navigation';
 export { createDataSource } from './data-source';
+export { coerceValueByKind, isEditable } from './editing';
 export { createGrid, getGridDataSource } from './grid-engine';
 export { createSelectionModel, normalizeRange } from './range';
 export { extendSelection } from './selection';
