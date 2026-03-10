@@ -1,7 +1,7 @@
 export { createDataSource } from './data-source';
 export { createGrid, getGridDataSource } from './grid-engine';
 export { createSelectionModel, normalizeRange } from './range';
-export { createViewport } from './viewport';
+export { calculateVirtualViewport, createViewport } from './viewport';
 export type {
   CellCoord,
   CellRange,

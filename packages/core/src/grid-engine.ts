@@ -1,7 +1,7 @@
 import { createDataSource } from './data-source';
 import { GridEventEmitter } from './event-emitter';
 import { createSelectionModel, normalizeCell, normalizeRange } from './range';
-import { createViewport } from './viewport';
+import { calculateVirtualViewport, createViewport } from './viewport';
 import type {
   CellRange,
   CellValue,
@@ -42,8 +42,8 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
     selection: null,
     editSession: null,
     scrollTop: 0,
-    viewportHeight: resolvedOptions.rowHeight,
-    viewport: createViewport(dataSource.getRowCount(), resolvedOptions.rowHeight)
+    viewportHeight: resolvedOptions.rowHeight * 10,
+    viewport: createViewport(dataSource.getRowCount(), resolvedOptions.rowHeight, resolvedOptions.overscan)
   };
 
   const notify = () => {
@@ -55,6 +55,26 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
   const setState = (nextState: GridState) => {
     state = nextState;
     notify();
+  };
+
+  const syncViewport = (partial: Partial<Pick<GridState, 'scrollTop' | 'viewportHeight' | 'rowCount'>>) => {
+    const nextScrollTop = partial.scrollTop ?? state.scrollTop;
+    const nextViewportHeight = partial.viewportHeight ?? state.viewportHeight;
+    const nextRowCount = partial.rowCount ?? state.rowCount;
+
+    return {
+      ...state,
+      rowCount: nextRowCount,
+      scrollTop: nextScrollTop,
+      viewportHeight: nextViewportHeight,
+      viewport: calculateVirtualViewport({
+        rowCount: nextRowCount,
+        rowHeight: resolvedOptions.rowHeight,
+        viewportHeight: nextViewportHeight,
+        scrollTop: nextScrollTop,
+        overscan: resolvedOptions.overscan
+      })
+    };
   };
 
   const ensureActive = () => {
@@ -97,19 +117,13 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
   const setCell = (row: number, col: number, value: CellValue) => {
     ensureActive();
     dataSource.setCell?.(row, col, value);
-    setState({
-      ...state,
-      rowCount: dataSource.getRowCount()
-    });
+    setState(syncViewport({ rowCount: dataSource.getRowCount() }));
   };
 
   const updateRow = (row: number, nextRow: TRow) => {
     ensureActive();
     dataSource.updateRow?.(row, nextRow);
-    setState({
-      ...state,
-      rowCount: dataSource.getRowCount()
-    });
+    setState(syncViewport({ rowCount: dataSource.getRowCount() }));
   };
 
   const startEdit = (row: number, col: number, nextValue?: CellValue): EditSession => {
@@ -161,13 +175,20 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
     });
   };
 
+  const setViewport = (viewportHeight: number, scrollTop: number) => {
+    ensureActive();
+    const nextState = syncViewport({
+      viewportHeight,
+      scrollTop
+    });
+    setState(nextState);
+    return nextState.viewport;
+  };
+
   const scrollTo = (row: number) => {
     ensureActive();
     const target = normalizeCell(row, 0, state.rowCount, state.columnCount).row * resolvedOptions.rowHeight;
-    setState({
-      ...state,
-      scrollTop: target
-    });
+    setState(syncViewport({ scrollTop: target }));
     return target;
   };
 
@@ -186,6 +207,7 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
       return () => subscribers.delete(listener);
     },
     on: (eventName, handler) => eventEmitter.on(eventName, handler),
+    setViewport,
     select,
     focusCell,
     startEdit,
