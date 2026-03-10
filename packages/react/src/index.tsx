@@ -1,5 +1,10 @@
-import { gridCoreVersion } from '@zell/grid-core';
+import { createGrid } from '@zell/grid-core';
 
 export function GridReactVersion() {
-  return `grid-react uses core ${gridCoreVersion}`;
+  const grid = createGrid({
+    columns: [{ id: 'version' }],
+    data: [['ready']]
+  });
+
+  return `grid-react uses core rows ${grid.getState().rowCount}`;
 }

@@ -1,1 +1,28 @@
-export const gridCoreVersion = '0.1.0';
+export { createDataSource } from './data-source';
+export { createGrid, getGridDataSource } from './grid-engine';
+export { createSelectionModel, normalizeRange } from './range';
+export { createViewport } from './viewport';
+export type {
+  CellCoord,
+  CellRange,
+  CellRenderer,
+  CellRendererContext,
+  CellValue,
+  ColumnDef,
+  ColumnKind,
+  DataSource,
+  EditSession,
+  FrameworkAdapter,
+  GridData,
+  GridEventHandler,
+  GridEventMap,
+  GridEventName,
+  GridInstance,
+  GridOptions,
+  GridPlugin,
+  GridSnapshot,
+  GridState,
+  SelectionKind,
+  SelectionModel,
+  VirtualViewport
+} from './types';
