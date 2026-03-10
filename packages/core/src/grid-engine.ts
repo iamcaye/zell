@@ -374,7 +374,10 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
     getState: () => state,
     getSnapshot: (): GridSnapshot => ({ state }),
     subscribe: (listener) => {
-      ensureActive();
+      if (destroyed) {
+        return () => {};
+      }
+
       subscribers.add(listener);
       return () => subscribers.delete(listener);
     },

@@ -1,3 +1,4 @@
+import { StrictMode } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { Grid } from '../Grid';
@@ -15,6 +16,21 @@ describe('Grid', () => {
     expect(screen.getByRole('grid')).toBeTruthy();
     expect(screen.getByText('User 0')).toBeTruthy();
     expect(screen.queryByText('User 80')).toBeNull();
+  });
+
+  it('stays mounted under React Strict Mode effect replays', () => {
+    render(
+      <StrictMode>
+        <Grid
+          height={220}
+          columns={[{ id: 'name' }, { id: 'age', kind: 'number' }]}
+          data={Array.from({ length: 100 }, (_, index) => [`User ${index}`, index])}
+        />
+      </StrictMode>
+    );
+
+    expect(screen.getByRole('grid')).toBeTruthy();
+    expect(screen.getByText('User 0')).toBeTruthy();
   });
 
   it('supports keyboard navigation, editing, and clipboard events through the DOM', () => {
