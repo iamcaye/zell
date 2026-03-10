@@ -31,11 +31,11 @@ export function normalizeRange(range: CellRange, rowCount: number, columnCount: 
   };
 }
 
-export function createSelectionModel(range: CellRange): SelectionModel {
+export function createSelectionModel(range: CellRange, anchor = range.start, focus = range.end): SelectionModel {
   return {
     kind: range.start.row === range.end.row && range.start.col === range.end.col ? 'cell' : 'range',
-    anchor: range.start,
-    focus: range.end,
+    anchor,
+    focus,
     range
   };
 }

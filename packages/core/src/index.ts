@@ -3,6 +3,7 @@ export type { GridKey } from './navigation';
 export { createDataSource } from './data-source';
 export { createGrid, getGridDataSource } from './grid-engine';
 export { createSelectionModel, normalizeRange } from './range';
+export { extendSelection } from './selection';
 export { calculateVirtualViewport, createViewport } from './viewport';
 export type {
   CellCoord,

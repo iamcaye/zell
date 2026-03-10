@@ -2,6 +2,7 @@ import { createDataSource } from './data-source';
 import { GridEventEmitter } from './event-emitter';
 import { getNextCellFromKey, type GridKey } from './navigation';
 import { createSelectionModel, normalizeCell, normalizeRange } from './range';
+import { extendSelection as extendSelectionFromAnchor } from './selection';
 import { calculateVirtualViewport, createViewport } from './viewport';
 import type {
   CellRange,
@@ -116,7 +117,7 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
   const select = (range: CellRange) => {
     ensureActive();
     const normalizedRange = normalizeRange(range, state.rowCount, state.columnCount);
-    const selection = createSelectionModel(normalizedRange);
+    const selection = createSelectionModel(normalizedRange, range.start, range.end);
     setState({
       ...state,
       selection,
@@ -125,6 +126,37 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
     eventEmitter.emit('selectionChange', { selection });
     eventEmitter.emit('focusChange', { previous: state.focusedCell, current: selection.focus });
     return selection;
+  };
+
+  const selectCell = (row: number, col: number) =>
+    select({
+      start: { row, col },
+      end: { row, col }
+    });
+
+  const extendSelection = (row: number, col: number) => {
+    ensureActive();
+    const anchor = state.selection?.anchor ?? state.focusedCell ?? { row: 0, col: 0 };
+    const focus = normalizeCell(row, col, state.rowCount, state.columnCount);
+    const selection = extendSelectionFromAnchor(anchor, focus, state.rowCount, state.columnCount);
+
+    setState({
+      ...state,
+      selection,
+      focusedCell: focus
+    });
+    eventEmitter.emit('selectionChange', { selection });
+    eventEmitter.emit('focusChange', { previous: state.focusedCell, current: focus });
+    return selection;
+  };
+
+  const clearSelection = () => {
+    ensureActive();
+    setState({
+      ...state,
+      selection: null
+    });
+    eventEmitter.emit('selectionChange', { selection: null });
   };
 
   const getCell = (row: number, col: number) => {
@@ -223,6 +255,12 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
       shiftKey: modifiers?.shiftKey
     });
 
+    if (modifiers?.shiftKey) {
+      extendSelection(next.row, next.col);
+      ensureRowVisible(next.row);
+      return next;
+    }
+
     return focusCell(next.row, next.col);
   };
 
@@ -243,6 +281,9 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
     on: (eventName, handler) => eventEmitter.on(eventName, handler),
     setViewport,
     handleKeyDown,
+    selectCell,
+    extendSelection,
+    clearSelection,
     select,
     focusCell,
     startEdit,
