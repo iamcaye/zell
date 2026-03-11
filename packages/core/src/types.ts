@@ -168,6 +168,9 @@ export interface GridInstance<TRow = unknown> {
   removeSheet(sheetId: SheetId): void;
   getCell(row: number, col: number): CellValue;
   setCell(row: number, col: number, value: CellValue): void;
+  setFormula(row: number, col: number, formula: string): void;
+  getFormula(row: number, col: number): string | undefined;
+  recalculate(): void;
   updateRow(row: number, nextRow: TRow): void;
   use(plugin: GridPlugin<TRow>): void;
   destroy(): void;

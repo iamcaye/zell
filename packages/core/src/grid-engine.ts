@@ -3,6 +3,7 @@ import { createDataSource } from './data-source';
 import { coerceValueByKind, isEditable } from './editing';
 import { GridEventEmitter } from './event-emitter';
 import { getNextCellFromKey, type GridKey } from './navigation';
+import { createFormulaEngine } from './spreadsheet/formula-engine';
 import { createSelectionModel, normalizeCell, normalizeRange } from './range';
 import { createWorkbook } from './spreadsheet/workbook';
 import { extendSelection as extendSelectionFromAnchor } from './selection';
@@ -48,6 +49,15 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
     }
 
     return activeDataSource;
+  };
+
+  const getDataSourceForSheet = (sheetId: string) => {
+    const sheet = workbook.getSheets().find((entry) => entry.id === sheetId);
+    if (!sheet?.dataSource) {
+      throw new Error(`Sheet ${sheetId} data source is not available`);
+    }
+
+    return sheet.dataSource as DataSource<TRow>;
   };
 
   const createEmptySheetDataSource = (rowCount: number, columnCount: number): DataSource<TRow> => {
@@ -119,6 +129,14 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
       throw new Error('Grid instance has been destroyed');
     }
   };
+
+  const formulaEngine = createFormulaEngine((sheetId) => {
+    const dataSource = getDataSourceForSheet(sheetId);
+    return {
+      getCell: (row, col) => dataSource.getCell(row, col) as CellValue,
+      setCell: (row, col, value) => dataSource.setCell?.(row, col, value)
+    };
+  });
 
   const ensureRowVisible = (row: number) => {
     const rowTop = row * resolvedOptions.rowHeight;
@@ -201,8 +219,33 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
 
   const setCell = (row: number, col: number, value: CellValue) => {
     ensureActive();
+    const activeSheetId = workbook.getActiveSheet().id;
     const activeDataSource = getActiveDataSource();
+    formulaEngine.clearFormula(activeSheetId, row, col);
     activeDataSource.setCell?.(row, col, value);
+    formulaEngine.handleCellEdit(activeSheetId, row, col);
+    setState(syncViewport({ rowCount: activeDataSource.getRowCount() }));
+  };
+
+  const setFormula = (row: number, col: number, formula: string) => {
+    ensureActive();
+    const activeSheetId = workbook.getActiveSheet().id;
+    formulaEngine.setFormula(activeSheetId, row, col, formula);
+    const activeDataSource = getActiveDataSource();
+    setState(syncViewport({ rowCount: activeDataSource.getRowCount() }));
+  };
+
+  const getFormula = (row: number, col: number) => {
+    ensureActive();
+    const activeSheetId = workbook.getActiveSheet().id;
+    return formulaEngine.getFormula(activeSheetId, row, col);
+  };
+
+  const recalculate = () => {
+    ensureActive();
+    const activeSheetId = workbook.getActiveSheet().id;
+    formulaEngine.recalculate(activeSheetId);
+    const activeDataSource = getActiveDataSource();
     setState(syncViewport({ rowCount: activeDataSource.getRowCount() }));
   };
 
@@ -245,6 +288,7 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
   const removeSheet = (sheetId: string) => {
     ensureActive();
     workbook.removeSheet(sheetId);
+    formulaEngine.removeSheet(sheetId);
     const activeDataSource = getActiveDataSource();
     setState(syncViewport({ rowCount: activeDataSource.getRowCount() }));
   };
@@ -475,6 +519,9 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
     removeSheet,
     getCell,
     setCell,
+    setFormula,
+    getFormula,
+    recalculate,
     updateRow,
     use,
     destroy: () => {
