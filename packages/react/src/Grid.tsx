@@ -210,6 +210,8 @@ export function Grid<TRow>({ height = 520, className, ...options }: GridProps<TR
   const { grid, state } = useGrid(options);
   const bodyRef = useRef<HTMLDivElement>(null);
   const lastHoveredCellRef = useRef<{ row: number; col: number } | null>(null);
+  const pendingScrollTopRef = useRef<number | null>(null);
+  const scrollFrameRef = useRef<number | null>(null);
   const [isDraggingSelection, setIsDraggingSelection] = useState(false);
   const headerHeight = options.rowHeight ?? 32;
   const bodyHeight = Math.max(120, height - headerHeight);
@@ -233,6 +235,14 @@ export function Grid<TRow>({ height = 520, className, ...options }: GridProps<TR
     const stopDragging = () => setIsDraggingSelection(false);
     window.addEventListener('mouseup', stopDragging);
     return () => window.removeEventListener('mouseup', stopDragging);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (scrollFrameRef.current != null) {
+        window.cancelAnimationFrame(scrollFrameRef.current);
+      }
+    };
   }, []);
 
   const visibleRows = useMemo(() => {
@@ -355,7 +365,21 @@ export function Grid<TRow>({ height = 520, className, ...options }: GridProps<TR
           grid.pasteText(event.clipboardData.getData('text/plain'));
         }}
         onScroll={(event) => {
-          grid.setViewport(bodyHeight, event.currentTarget.scrollTop);
+          pendingScrollTopRef.current = event.currentTarget.scrollTop;
+          if (scrollFrameRef.current != null) {
+            return;
+          }
+
+          scrollFrameRef.current = window.requestAnimationFrame(() => {
+            scrollFrameRef.current = null;
+            const scrollTop = pendingScrollTopRef.current;
+            if (scrollTop == null) {
+              return;
+            }
+
+            pendingScrollTopRef.current = null;
+            grid.setViewport(bodyHeight, scrollTop);
+          });
         }}
         onMouseDown={(e) => {
           const cell = getCellFromEvent(e);
