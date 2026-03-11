@@ -29,24 +29,24 @@ export function App() {
     <main className="app-shell">
       <section className="hero-panel">
         <div className="hero-copy">
-          <p className="eyebrow">Grid Engine MVP</p>
-          <h1>Headless core, React adapter, 100k-row demo.</h1>
+          <p className="eyebrow">/01 MODULE</p>
+          <h1>Portfolio Operations Grid</h1>
           <p className="lede">
-            Navigate with the keyboard, drag a range, double-click to edit, and paste TSV directly from a spreadsheet.
+            High-density data surface for technical operations teams. Keyboard navigation, range selection, inline editing, and TSV sync in one focused workspace.
           </p>
         </div>
         <div className="metric-strip">
           <article>
             <strong>100k</strong>
-            <span>virtualized rows</span>
+            <span>STEP 01 - VIRTUAL ROWS</span>
           </article>
           <article>
             <strong>TSV</strong>
-            <span>copy/paste ready</span>
+            <span>STEP 02 - DATA TRANSFER</span>
           </article>
           <article>
-            <strong>TypeScript</strong>
-            <span>typed public API</span>
+            <strong>Typed API</strong>
+            <span>STEP 03 - SAFE INTEGRATION</span>
           </article>
         </div>
       </section>
@@ -54,10 +54,10 @@ export function App() {
       <section className="demo-panel">
         <div className="demo-header">
           <div>
-            <p className="section-label">React Adapter</p>
-            <h2>Portfolio operations grid</h2>
+            <p className="section-label">/02 FEATURE</p>
+            <h2>React Adapter Module</h2>
           </div>
-          <p className="demo-hint">Arrow keys move focus. Shift extends selection. Type to edit.</p>
+          <p className="demo-hint">Arrow keys move focus. Shift extends range. Type to edit cells.</p>
         </div>
         <Grid height={560} columns={columns} data={data} rowHeight={40} overscan={6} />
       </section>
