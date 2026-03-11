@@ -25,3 +25,19 @@ export interface WorkbookModel<TRow = unknown> {
   getSheets(): ReadonlyArray<Readonly<SheetModel<TRow>>>;
   removeSheet(sheetId: SheetId): void;
 }
+
+export interface CellAddress {
+  row: number;
+  col: number;
+}
+
+export interface CellRangeAddress {
+  start: CellAddress;
+  end: CellAddress;
+}
+
+export type FormulaBinaryOperator = '+' | '-' | '*' | '/';
+
+export interface FormulaEvaluationOptions {
+  getCellValue(cell: string): unknown;
+}

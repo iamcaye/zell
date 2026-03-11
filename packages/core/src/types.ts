@@ -1,4 +1,13 @@
-import type { SheetId, SheetModel, SpreadsheetCell, WorkbookModel } from './spreadsheet/types';
+import type {
+  CellAddress,
+  CellRangeAddress,
+  FormulaBinaryOperator,
+  FormulaEvaluationOptions,
+  SheetId,
+  SheetModel,
+  SpreadsheetCell,
+  WorkbookModel
+} from './spreadsheet/types';
 
 export type CellValue = string | number | boolean | Date | null | undefined;
 
@@ -164,4 +173,13 @@ export interface GridInstance<TRow = unknown> {
   destroy(): void;
 }
 
-export type { SheetId, SheetModel, SpreadsheetCell, WorkbookModel };
+export type {
+  CellAddress,
+  CellRangeAddress,
+  FormulaBinaryOperator,
+  FormulaEvaluationOptions,
+  SheetId,
+  SheetModel,
+  SpreadsheetCell,
+  WorkbookModel
+};
