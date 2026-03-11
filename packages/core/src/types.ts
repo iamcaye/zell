@@ -171,6 +171,7 @@ export interface GridInstance<TRow = unknown> {
   getCell(row: number, col: number): CellValue;
   setCell(row: number, col: number, value: CellValue): void;
   insertRows(startRow: number, count?: number): void;
+  autofill(sourceRange: CellRange, targetRange: CellRange): void;
   setFormula(row: number, col: number, formula: string): void;
   getFormula(row: number, col: number): string | undefined;
   recalculate(): void;

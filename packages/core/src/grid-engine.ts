@@ -5,6 +5,7 @@ import { GridEventEmitter } from './event-emitter';
 import { getNextCellFromKey, type GridKey } from './navigation';
 import { createFormulaEngine } from './spreadsheet/formula-engine';
 import { createHistory } from './spreadsheet/history';
+import { getAutofillChanges } from './spreadsheet/autofill';
 import { createSelectionModel, normalizeCell, normalizeRange } from './range';
 import { createWorkbook } from './spreadsheet/workbook';
 import { extendSelection as extendSelectionFromAnchor } from './selection';
@@ -553,6 +554,50 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
     });
   };
 
+  const autofill = (sourceRange: CellRange, targetRange: CellRange) => {
+    ensureActive();
+    const normalizedSourceRange = normalizeRange(sourceRange, state.rowCount, state.columnCount);
+    const normalizedTargetRange = normalizeRange(targetRange, state.rowCount, state.columnCount);
+
+    const changes = getAutofillChanges({
+      sourceRange: normalizedSourceRange,
+      targetRange: normalizedTargetRange,
+      getCell
+    });
+
+    if (changes.length === 0) {
+      return;
+    }
+
+    const previousState = changes.map((change) => ({
+      row: change.row,
+      col: change.col,
+      previousValue: getCell(change.row, change.col),
+      previousFormula: getFormula(change.row, change.col)
+    }));
+
+    for (const change of changes) {
+      applyLiteralCell(change.row, change.col, change.value);
+    }
+
+    if (isApplyingHistory) {
+      return;
+    }
+
+    history.push({
+      undo: () => {
+        for (const cell of previousState) {
+          restoreCell(cell.row, cell.col, cell.previousValue, cell.previousFormula);
+        }
+      },
+      redo: () => {
+        for (const change of changes) {
+          applyLiteralCell(change.row, change.col, change.value);
+        }
+      }
+    });
+  };
+
   const undo = () => runHistoryAction(() => history.undo());
   const redo = () => runHistoryAction(() => history.redo());
   const canUndo = () => history.canUndo();
@@ -638,6 +683,7 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
     getCell,
     setCell,
     insertRows,
+    autofill,
     setFormula,
     getFormula,
     recalculate,
