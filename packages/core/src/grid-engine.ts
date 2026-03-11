@@ -3,7 +3,13 @@ import { createDataSource } from './data-source';
 import { coerceValueByKind, isEditable } from './editing';
 import { GridEventEmitter } from './event-emitter';
 import { getNextCellFromKey, type GridKey } from './navigation';
+import { createFormulaEngine } from './spreadsheet/formula-engine';
+import { formatCellValue, type CellFormat } from './spreadsheet/formatting';
+import { createHistory } from './spreadsheet/history';
+import { createMergeRegistry, type MergeRegistry } from './spreadsheet/merged-cells';
+import { getAutofillChanges } from './spreadsheet/autofill';
 import { createSelectionModel, normalizeCell, normalizeRange } from './range';
+import { createWorkbook } from './spreadsheet/workbook';
 import { extendSelection as extendSelectionFromAnchor } from './selection';
 import { calculateVirtualViewport, createViewport } from './viewport';
 import type {
@@ -30,7 +36,8 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
     editable: options.editable ?? true
   };
 
-  const dataSource = createDataSource(options.data, options.columns);
+  const initialDataSource = createDataSource(options.data, options.columns);
+  const workbook = createWorkbook<TRow>({ initialSheetDataSource: initialDataSource });
   const eventEmitter = new GridEventEmitter();
   const subscribers = new Set<() => void>();
   let destroyed = false;
@@ -39,15 +46,66 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
     eventEmitter.on(eventName as GridEventName, handler as never);
   }
 
+  const getActiveDataSource = () => {
+    const activeDataSource = workbook.getActiveSheet().dataSource;
+    if (!activeDataSource) {
+      throw new Error('Active sheet data source is not available');
+    }
+
+    return activeDataSource;
+  };
+
+  const getDataSourceForSheet = (sheetId: string) => {
+    const sheet = workbook.getSheets().find((entry) => entry.id === sheetId);
+    if (!sheet?.dataSource) {
+      throw new Error(`Sheet ${sheetId} data source is not available`);
+    }
+
+    return sheet.dataSource as DataSource<TRow>;
+  };
+
+  const createEmptySheetDataSource = (rowCount: number, columnCount: number): DataSource<TRow> => {
+    const matrix: CellValue[][] = Array.from({ length: rowCount }, () =>
+      Array.from({ length: columnCount }, () => undefined)
+    );
+
+    return {
+      getRowCount: () => matrix.length,
+      getCell: (row, col) => matrix[row]?.[col],
+      setCell: (row, col, value) => {
+        const targetRow = matrix[row];
+        if (!targetRow) {
+          return;
+        }
+        targetRow[col] = value;
+      },
+      insertRows: (startRow, count) => {
+        const safeStart = Math.max(0, Math.min(startRow, matrix.length));
+        const nextRows = Array.from({ length: Math.max(0, count) }, () =>
+          Array.from({ length: columnCount }, () => undefined)
+        );
+        matrix.splice(safeStart, 0, ...nextRows);
+      },
+      removeRows: (startRow, count) => {
+        const safeStart = Math.max(0, Math.min(startRow, matrix.length));
+        matrix.splice(safeStart, Math.max(0, count));
+      }
+    };
+  };
+
   let state: GridState = {
-    rowCount: dataSource.getRowCount(),
+    rowCount: getActiveDataSource().getRowCount(),
     columnCount: options.columns.length,
     focusedCell: null,
     selection: null,
     editSession: null,
     scrollTop: 0,
     viewportHeight: resolvedOptions.rowHeight * 10,
-    viewport: createViewport(dataSource.getRowCount(), resolvedOptions.rowHeight, resolvedOptions.overscan)
+    viewport: createViewport(
+      getActiveDataSource().getRowCount(),
+      resolvedOptions.rowHeight,
+      resolvedOptions.overscan
+    )
   };
 
   const notify = () => {
@@ -84,6 +142,60 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
   const ensureActive = () => {
     if (destroyed) {
       throw new Error('Grid instance has been destroyed');
+    }
+  };
+
+  const formulaEngine = createFormulaEngine((sheetId) => {
+    const dataSource = getDataSourceForSheet(sheetId);
+    return {
+      getCell: (row, col) => dataSource.getCell(row, col) as CellValue,
+      setCell: (row, col, value) => dataSource.setCell?.(row, col, value)
+    };
+  }, (sheetId, row, col) => {
+    const root = getSheetMergeRegistry(sheetId).getMergeRoot(row, col);
+    return root ?? { row, col };
+  });
+  const history = createHistory();
+  let isApplyingHistory = false;
+  const formatRegistryBySheet = new Map<string, Map<string, CellFormat>>();
+  const mergeRegistryBySheet = new Map<string, MergeRegistry>();
+
+  const toCellKey = (row: number, col: number) => `${row}:${col}`;
+
+  const getSheetFormatRegistry = (sheetId: string) => {
+    const existing = formatRegistryBySheet.get(sheetId);
+    if (existing) {
+      return existing;
+    }
+
+    const created = new Map<string, CellFormat>();
+    formatRegistryBySheet.set(sheetId, created);
+    return created;
+  };
+
+  const getSheetMergeRegistry = (sheetId: string) => {
+    const existing = mergeRegistryBySheet.get(sheetId);
+    if (existing) {
+      return existing;
+    }
+
+    const created = createMergeRegistry();
+    mergeRegistryBySheet.set(sheetId, created);
+    return created;
+  };
+
+  const resolveMergedCell = (row: number, col: number) => {
+    const activeSheetId = workbook.getActiveSheet().id;
+    const root = getSheetMergeRegistry(activeSheetId).getMergeRoot(row, col);
+    return root ?? { row, col };
+  };
+
+  const runHistoryAction = (action: () => boolean) => {
+    isApplyingHistory = true;
+    try {
+      return action();
+    } finally {
+      isApplyingHistory = false;
     }
   };
 
@@ -163,19 +275,155 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
 
   const getCell = (row: number, col: number) => {
     ensureActive();
-    return dataSource.getCell(row, col);
+    const resolvedCell = resolveMergedCell(row, col);
+    return getActiveDataSource().getCell(resolvedCell.row, resolvedCell.col) as CellValue;
+  };
+
+  const applyLiteralCell = (row: number, col: number, value: CellValue) => {
+    const activeSheetId = workbook.getActiveSheet().id;
+    const activeDataSource = getActiveDataSource();
+    formulaEngine.clearFormula(activeSheetId, row, col);
+    activeDataSource.setCell?.(row, col, value);
+    formulaEngine.handleCellEdit(activeSheetId, row, col);
+    setState(syncViewport({ rowCount: activeDataSource.getRowCount() }));
+  };
+
+  const restoreCell = (row: number, col: number, value: CellValue, formula?: string) => {
+    if (typeof formula === 'string') {
+      setFormula(row, col, formula);
+      return;
+    }
+
+    applyLiteralCell(row, col, value);
   };
 
   const setCell = (row: number, col: number, value: CellValue) => {
     ensureActive();
-    dataSource.setCell?.(row, col, value);
-    setState(syncViewport({ rowCount: dataSource.getRowCount() }));
+    const targetCell = resolveMergedCell(row, col);
+    const previousValue = getCell(targetCell.row, targetCell.col);
+    const previousFormula = getFormula(targetCell.row, targetCell.col);
+
+    applyLiteralCell(targetCell.row, targetCell.col, value);
+
+    if (isApplyingHistory) {
+      return;
+    }
+
+    history.push({
+      undo: () => restoreCell(targetCell.row, targetCell.col, previousValue, previousFormula),
+      redo: () => applyLiteralCell(targetCell.row, targetCell.col, value)
+    });
+  };
+
+  const setFormula = (row: number, col: number, formula: string) => {
+    ensureActive();
+    const targetCell = resolveMergedCell(row, col);
+    const activeSheetId = workbook.getActiveSheet().id;
+    formulaEngine.setFormula(activeSheetId, targetCell.row, targetCell.col, formula);
+    const activeDataSource = getActiveDataSource();
+    setState(syncViewport({ rowCount: activeDataSource.getRowCount() }));
+  };
+
+  const getFormula = (row: number, col: number) => {
+    ensureActive();
+    const targetCell = resolveMergedCell(row, col);
+    const activeSheetId = workbook.getActiveSheet().id;
+    return formulaEngine.getFormula(activeSheetId, targetCell.row, targetCell.col);
+  };
+
+  const recalculate = () => {
+    ensureActive();
+    const activeSheetId = workbook.getActiveSheet().id;
+    formulaEngine.recalculate(activeSheetId);
+    const activeDataSource = getActiveDataSource();
+    setState(syncViewport({ rowCount: activeDataSource.getRowCount() }));
   };
 
   const updateRow = (row: number, nextRow: TRow) => {
     ensureActive();
-    dataSource.updateRow?.(row, nextRow);
-    setState(syncViewport({ rowCount: dataSource.getRowCount() }));
+    const activeDataSource = getActiveDataSource();
+    activeDataSource.updateRow?.(row, nextRow);
+    setState(syncViewport({ rowCount: activeDataSource.getRowCount() }));
+  };
+
+  const addSheet = (name?: string) => {
+    ensureActive();
+    const rowCount = state.rowCount;
+    return workbook.addSheet(name, createEmptySheetDataSource(rowCount, state.columnCount));
+  };
+
+  const setActiveSheet = (sheetId: string) => {
+    ensureActive();
+    workbook.setActiveSheet(sheetId);
+    const activeSheet = workbook.getActiveSheet();
+    const activeDataSource = activeSheet.dataSource;
+    setState(
+      syncViewport({
+        rowCount: activeDataSource?.getRowCount() ?? 0
+      })
+    );
+    return activeSheet;
+  };
+
+  const getActiveSheet = () => {
+    ensureActive();
+    return workbook.getActiveSheet();
+  };
+
+  const getSheets = () => {
+    ensureActive();
+    return workbook.getSheets();
+  };
+
+  const removeSheet = (sheetId: string) => {
+    ensureActive();
+    workbook.removeSheet(sheetId);
+    formulaEngine.removeSheet(sheetId);
+    formatRegistryBySheet.delete(sheetId);
+    mergeRegistryBySheet.delete(sheetId);
+    const activeDataSource = getActiveDataSource();
+    setState(syncViewport({ rowCount: activeDataSource.getRowCount() }));
+  };
+
+  const setCellFormat = (row: number, col: number, format: CellFormat | undefined) => {
+    ensureActive();
+    const activeSheetId = workbook.getActiveSheet().id;
+    const resolvedCell = resolveMergedCell(row, col);
+    const key = toCellKey(resolvedCell.row, resolvedCell.col);
+    const formatRegistry = getSheetFormatRegistry(activeSheetId);
+
+    if (format === undefined) {
+      formatRegistry.delete(key);
+      return;
+    }
+
+    formatRegistry.set(key, format);
+  };
+
+  const getCellFormat = (row: number, col: number) => {
+    ensureActive();
+    const activeSheetId = workbook.getActiveSheet().id;
+    const resolvedCell = resolveMergedCell(row, col);
+    return getSheetFormatRegistry(activeSheetId).get(toCellKey(resolvedCell.row, resolvedCell.col));
+  };
+
+  const formatCell = (row: number, col: number) => {
+    ensureActive();
+    return formatCellValue(getCell(row, col), getCellFormat(row, col));
+  };
+
+  const mergeCells = (range: CellRange) => {
+    ensureActive();
+    const activeSheetId = workbook.getActiveSheet().id;
+    const normalizedRange = normalizeRange(range, state.rowCount, state.columnCount);
+    getSheetMergeRegistry(activeSheetId).merge(normalizedRange);
+  };
+
+  const unmergeCells = (range: CellRange) => {
+    ensureActive();
+    const activeSheetId = workbook.getActiveSheet().id;
+    const normalizedRange = normalizeRange(range, state.rowCount, state.columnCount);
+    getSheetMergeRegistry(activeSheetId).unmerge(normalizedRange);
   };
 
   const startEdit = (row: number, col: number, nextValue?: CellValue): EditSession => {
@@ -287,6 +535,14 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
       return { start, end: start };
     }
 
+    const changes: Array<{
+      row: number;
+      col: number;
+      previousValue: CellValue;
+      previousFormula?: string;
+      nextValue: CellValue;
+    }> = [];
+
     for (let rowOffset = 0; rowOffset < parsed.length; rowOffset += 1) {
       const row = parsed[rowOffset];
       if (!row) {
@@ -301,8 +557,34 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
         }
 
         const value = coerceValueByKind(column.kind, row[colOffset]);
-        setCell(start.row + rowOffset, columnIndex, value);
+        const nextRow = start.row + rowOffset;
+        changes.push({
+          row: nextRow,
+          col: columnIndex,
+          previousValue: getCell(nextRow, columnIndex),
+          previousFormula: getFormula(nextRow, columnIndex),
+          nextValue: value
+        });
       }
+    }
+
+    for (const change of changes) {
+      applyLiteralCell(change.row, change.col, change.nextValue);
+    }
+
+    if (!isApplyingHistory && changes.length > 0) {
+      history.push({
+        undo: () => {
+          for (const change of changes) {
+            restoreCell(change.row, change.col, change.previousValue, change.previousFormula);
+          }
+        },
+        redo: () => {
+          for (const change of changes) {
+            applyLiteralCell(change.row, change.col, change.nextValue);
+          }
+        }
+      });
     }
 
     const range = normalizeRange(
@@ -324,6 +606,86 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
     eventEmitter.emit('paste', { target: start, values, raw: text });
     return range;
   };
+
+  const insertRows = (startRow: number, count = 1) => {
+    ensureActive();
+    const rowCount = Math.max(0, Math.trunc(count));
+    if (rowCount === 0) {
+      return;
+    }
+
+    const activeDataSource = getActiveDataSource();
+    if (!activeDataSource.insertRows || !activeDataSource.removeRows) {
+      throw new Error('Active sheet data source does not support row insertion');
+    }
+
+    activeDataSource.insertRows(startRow, rowCount);
+    setState(syncViewport({ rowCount: activeDataSource.getRowCount() }));
+
+    if (isApplyingHistory) {
+      return;
+    }
+
+    history.push({
+      undo: () => {
+        activeDataSource.removeRows?.(startRow, rowCount);
+        setState(syncViewport({ rowCount: activeDataSource.getRowCount() }));
+      },
+      redo: () => {
+        activeDataSource.insertRows?.(startRow, rowCount);
+        setState(syncViewport({ rowCount: activeDataSource.getRowCount() }));
+      }
+    });
+  };
+
+  const autofill = (sourceRange: CellRange, targetRange: CellRange) => {
+    ensureActive();
+    const normalizedSourceRange = normalizeRange(sourceRange, state.rowCount, state.columnCount);
+    const normalizedTargetRange = normalizeRange(targetRange, state.rowCount, state.columnCount);
+
+    const changes = getAutofillChanges({
+      sourceRange: normalizedSourceRange,
+      targetRange: normalizedTargetRange,
+      getCell
+    });
+
+    if (changes.length === 0) {
+      return;
+    }
+
+    const previousState = changes.map((change) => ({
+      row: change.row,
+      col: change.col,
+      previousValue: getCell(change.row, change.col),
+      previousFormula: getFormula(change.row, change.col)
+    }));
+
+    for (const change of changes) {
+      applyLiteralCell(change.row, change.col, change.value);
+    }
+
+    if (isApplyingHistory) {
+      return;
+    }
+
+    history.push({
+      undo: () => {
+        for (const cell of previousState) {
+          restoreCell(cell.row, cell.col, cell.previousValue, cell.previousFormula);
+        }
+      },
+      redo: () => {
+        for (const change of changes) {
+          applyLiteralCell(change.row, change.col, change.value);
+        }
+      }
+    });
+  };
+
+  const undo = () => runHistoryAction(() => history.undo());
+  const redo = () => runHistoryAction(() => history.redo());
+  const canUndo = () => history.canUndo();
+  const canRedo = () => history.canRedo();
 
   const setViewport = (viewportHeight: number, scrollTop: number) => {
     ensureActive();
@@ -397,8 +759,27 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
     startEdit,
     stopEdit,
     scrollTo,
+    addSheet,
+    setActiveSheet,
+    getActiveSheet,
+    getSheets,
+    removeSheet,
     getCell,
     setCell,
+    insertRows,
+    autofill,
+    setFormula,
+    getFormula,
+    recalculate,
+    setCellFormat,
+    getCellFormat,
+    formatCell,
+    mergeCells,
+    unmergeCells,
+    undo,
+    redo,
+    canUndo,
+    canRedo,
     updateRow,
     use,
     destroy: () => {
@@ -416,5 +797,10 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
 }
 
 export function getGridDataSource<TRow>(grid: GridInstance<TRow>): DataSource<TRow> {
-  return createDataSource(grid.options.data, grid.options.columns);
+  const activeDataSource = grid.getActiveSheet().dataSource;
+  if (!activeDataSource) {
+    return createDataSource(grid.options.data, grid.options.columns);
+  }
+
+  return activeDataSource as DataSource<TRow>;
 }

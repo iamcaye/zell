@@ -1,3 +1,15 @@
+import type { CellFormat } from './spreadsheet/formatting';
+import type {
+  CellAddress,
+  CellRangeAddress,
+  FormulaBinaryOperator,
+  FormulaEvaluationOptions,
+  SheetId,
+  SheetModel,
+  SpreadsheetCell,
+  WorkbookModel
+} from './spreadsheet/types';
+
 export type CellValue = string | number | boolean | Date | null | undefined;
 
 export type ColumnKind = 'text' | 'number' | 'date' | 'boolean';
@@ -65,6 +77,8 @@ export interface DataSource<TRow = unknown> {
   getRow?(row: number): TRow | undefined;
   getCell(row: number, col: number): CellValue;
   setCell?(row: number, col: number, value: CellValue): void;
+  insertRows?(startRow: number, count: number): void;
+  removeRows?(startRow: number, count: number): void;
   updateRow?(row: number, nextRow: TRow): void;
 }
 
@@ -150,9 +164,40 @@ export interface GridInstance<TRow = unknown> {
   startEdit(row: number, col: number, nextValue?: CellValue): EditSession;
   stopEdit(mode?: 'commit' | 'cancel', nextValue?: CellValue): void;
   scrollTo(row: number): number;
+  addSheet(name?: string): SheetId;
+  setActiveSheet(sheetId: SheetId): Readonly<SheetModel<TRow>>;
+  getActiveSheet(): Readonly<SheetModel<TRow>>;
+  getSheets(): ReadonlyArray<Readonly<SheetModel<TRow>>>;
+  removeSheet(sheetId: SheetId): void;
   getCell(row: number, col: number): CellValue;
   setCell(row: number, col: number, value: CellValue): void;
+  insertRows(startRow: number, count?: number): void;
+  autofill(sourceRange: CellRange, targetRange: CellRange): void;
+  setFormula(row: number, col: number, formula: string): void;
+  getFormula(row: number, col: number): string | undefined;
+  recalculate(): void;
+  setCellFormat(row: number, col: number, format: CellFormat | undefined): void;
+  getCellFormat(row: number, col: number): CellFormat | undefined;
+  formatCell(row: number, col: number): string;
+  mergeCells(range: CellRange): void;
+  unmergeCells(range: CellRange): void;
+  undo(): boolean;
+  redo(): boolean;
+  canUndo(): boolean;
+  canRedo(): boolean;
   updateRow(row: number, nextRow: TRow): void;
   use(plugin: GridPlugin<TRow>): void;
   destroy(): void;
 }
+
+export type {
+  CellAddress,
+  CellFormat,
+  CellRangeAddress,
+  FormulaBinaryOperator,
+  FormulaEvaluationOptions,
+  SheetId,
+  SheetModel,
+  SpreadsheetCell,
+  WorkbookModel
+};

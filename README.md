@@ -44,6 +44,17 @@ grid.updateEditDraft('1400');
 grid.stopEdit();
 ```
 
+## Spreadsheet API
+
+`@zell/grid-core` now includes spreadsheet-focused methods on `GridInstance`:
+
+- formulas: `setFormula(row, col, formula)`, `getFormula(row, col)`, `recalculate()`
+- workbook sheets: `addSheet(name?)`, `setActiveSheet(sheetId)`, `getActiveSheet()`, `getSheets()`, `removeSheet(sheetId)`
+- history: `undo()`, `redo()`, `canUndo()`, `canRedo()`
+- autofill: `autofill(sourceRange, targetRange)`
+- formatting: `setCellFormat(row, col, format)`, `getCellFormat(row, col)`, `formatCell(row, col)`
+- merges: `mergeCells(range)`, `unmergeCells(range)`
+
 ## React API
 
 ```tsx
