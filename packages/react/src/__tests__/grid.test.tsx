@@ -33,6 +33,19 @@ describe('Grid', () => {
     expect(screen.getByText('User 0')).toBeTruthy();
   });
 
+  it('starts editing a cell on double-click', () => {
+    render(
+      <Grid
+        height={220}
+        columns={[{ id: 'name' }, { id: 'age', kind: 'number' }]}
+        data={[['Ada', 32]]}
+      />
+    );
+
+    fireEvent.doubleClick(screen.getByText('Ada'));
+    expect(screen.getByDisplayValue('Ada')).toBeTruthy();
+  });
+
   it('supports keyboard navigation, editing, and clipboard events through the DOM', () => {
     render(
       <Grid

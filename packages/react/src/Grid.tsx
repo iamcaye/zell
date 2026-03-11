@@ -1,5 +1,5 @@
-import type { CellCoord, CellValue, ColumnDef, GridKey, GridOptions } from '@zell/grid-core';
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEventHandler } from 'react';
+import type { CellValue, ColumnDef, GridInstance, GridKey, GridOptions } from '@zell/grid-core';
+import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEventHandler } from 'react';
 import { useGrid } from './use-grid';
 
 export interface GridProps<TRow> extends GridOptions<TRow> {
@@ -7,22 +7,6 @@ export interface GridProps<TRow> extends GridOptions<TRow> {
   className?: string;
 }
 
-function isSameCell(left: CellCoord | null, right: CellCoord | null) {
-  return left?.row === right?.row && left?.col === right?.col;
-}
-
-function isCellInRange(cell: CellCoord, range: { start: CellCoord; end: CellCoord } | null | undefined) {
-  if (!range) {
-    return false;
-  }
-
-  return (
-    cell.row >= range.start.row &&
-    cell.row <= range.end.row &&
-    cell.col >= range.start.col &&
-    cell.col <= range.end.col
-  );
-}
 
 function formatValue(value: CellValue, kind: ColumnDef['kind']) {
   if (value == null) {
@@ -37,9 +21,195 @@ function formatValue(value: CellValue, kind: ColumnDef['kind']) {
   return String(value);
 }
 
+function getCellFromEvent(e: React.MouseEvent): { row: number; col: number } | null {
+  const el = (e.target as HTMLElement).closest('[data-row]');
+  if (!el) return null;
+  const row = el.getAttribute('data-row');
+  const col = el.getAttribute('data-col');
+  if (row === null || col === null) return null;
+  return { row: Number(row), col: Number(col) };
+}
+
+// ── ZCell ────────────────────────────────────────────────────────────────────
+
+interface ZCellProps<TRow> {
+  rowIndex: number;
+  colIndex: number;
+  column: ColumnDef<TRow>;
+  value: CellValue;
+  isFocused: boolean;
+  isSelected: boolean;
+  isEditing: boolean;
+  editDraft: CellValue | undefined;
+  rowHeight: number;
+  grid: GridInstance<TRow>;
+}
+
+function ZCellInner<TRow>({
+  rowIndex,
+  colIndex,
+  column,
+  value,
+  isFocused,
+  isSelected,
+  isEditing,
+  editDraft,
+  rowHeight,
+  grid
+}: ZCellProps<TRow>) {
+  return (
+    <div
+      role="gridcell"
+      aria-selected={isSelected}
+      data-row={rowIndex}
+      data-col={colIndex}
+      style={{
+        position: 'relative',
+        display: 'flex',
+        alignItems: 'center',
+        padding: '0 14px',
+        minHeight: rowHeight,
+        fontSize: 14,
+        color: '#111827',
+        background: isSelected ? 'rgba(12, 116, 146, 0.12)' : 'transparent',
+        boxShadow: isFocused ? 'inset 0 0 0 2px rgba(12, 116, 146, 0.9)' : 'none',
+        userSelect: 'none'
+      }}
+    >
+      {isEditing ? (
+        column.kind === 'boolean' ? (
+          <input
+            autoFocus
+            type="checkbox"
+            checked={Boolean(editDraft)}
+            onChange={(event) => {
+              grid.updateEditDraft(event.currentTarget.checked);
+              grid.stopEdit();
+            }}
+          />
+        ) : (
+          <input
+            autoFocus
+            type={column.kind === 'number' ? 'number' : column.kind === 'date' ? 'date' : 'text'}
+            value={formatValue(editDraft, column.kind)}
+            onChange={(event) => grid.updateEditDraft(event.currentTarget.value)}
+            onBlur={() => grid.stopEdit()}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                grid.stopEdit();
+              }
+              if (event.key === 'Escape') {
+                event.preventDefault();
+                grid.stopEdit('cancel');
+              }
+            }}
+            style={{
+              width: '100%',
+              border: 'none',
+              outline: 'none',
+              background: 'rgba(255,255,255,0.9)',
+              font: 'inherit',
+              color: 'inherit'
+            }}
+          />
+        )
+      ) : (
+        <span title={String(value ?? '')}>{formatValue(value, column.kind)}</span>
+      )}
+    </div>
+  );
+}
+
+const ZCell = memo(ZCellInner) as typeof ZCellInner;
+
+// ── ZRow ─────────────────────────────────────────────────────────────────────
+
+interface ZRowProps<TRow> {
+  rowIndex: number;
+  columns: ColumnDef<TRow>[];
+  gridTemplateColumns: string;
+  rowHeight: number;
+  grid: GridInstance<TRow>;
+  // Primitives only — enables React.memo shallow comparison
+  focusedRow: number | null;
+  focusedCol: number | null;
+  selHasSelection: boolean;
+  selRowStart: number;
+  selRowEnd: number;
+  selColStart: number;
+  selColEnd: number;
+  editRow: number | null;
+  editCol: number | null;
+  editDraft: CellValue | undefined;
+}
+
+function ZRowInner<TRow>({
+  rowIndex,
+  columns,
+  gridTemplateColumns,
+  rowHeight,
+  grid,
+  focusedRow,
+  focusedCol,
+  selHasSelection,
+  selRowStart,
+  selRowEnd,
+  selColStart,
+  selColEnd,
+  editRow,
+  editCol,
+  editDraft
+}: ZRowProps<TRow>) {
+  return (
+    <div
+      role="row"
+      style={{
+        display: 'grid',
+        gridTemplateColumns,
+        minHeight: rowHeight,
+        borderBottom: '1px solid rgba(15, 23, 42, 0.06)',
+        background: rowIndex % 2 === 0 ? 'rgba(255, 255, 255, 0.54)' : 'rgba(250, 250, 247, 0.8)'
+      }}
+    >
+      {columns.map((column, colIndex) => {
+        const isFocused = focusedRow === rowIndex && focusedCol === colIndex;
+        const isSelected =
+          selHasSelection &&
+          rowIndex >= selRowStart &&
+          rowIndex <= selRowEnd &&
+          colIndex >= selColStart &&
+          colIndex <= selColEnd;
+        const isEditing = editRow === rowIndex && editCol === colIndex;
+
+        return (
+          <ZCell
+            key={`${rowIndex}-${column.id}`}
+            rowIndex={rowIndex}
+            colIndex={colIndex}
+            column={column}
+            value={grid.getCell(rowIndex, colIndex)}
+            isFocused={isFocused}
+            isSelected={isSelected}
+            isEditing={isEditing}
+            editDraft={isEditing ? editDraft : undefined}
+            rowHeight={rowHeight}
+            grid={grid}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+const ZRow = memo(ZRowInner) as typeof ZRowInner;
+
+// ── Grid ─────────────────────────────────────────────────────────────────────
+
 export function Grid<TRow>({ height = 520, className, ...options }: GridProps<TRow>) {
   const { grid, state } = useGrid(options);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const lastHoveredCellRef = useRef<{ row: number; col: number } | null>(null);
   const [isDraggingSelection, setIsDraggingSelection] = useState(false);
   const headerHeight = options.rowHeight ?? 32;
   const bodyHeight = Math.max(120, height - headerHeight);
@@ -72,6 +242,11 @@ export function Grid<TRow>({ height = 520, className, ...options }: GridProps<TR
     }
     return rows;
   }, [state.viewport.rowEnd, state.viewport.rowStart]);
+
+  const gridTemplateColumns = useMemo(
+    () => options.columns.map((column) => `${column.width ?? 160}px`).join(' '),
+    [options.columns]
+  );
 
   const handleKeyDown: KeyboardEventHandler<HTMLDivElement> = (event) => {
     if (event.metaKey || event.ctrlKey || event.altKey) {
@@ -122,7 +297,17 @@ export function Grid<TRow>({ height = 520, className, ...options }: GridProps<TR
     boxShadow: '0 32px 80px rgba(15, 23, 42, 0.12)'
   };
 
-  const gridTemplateColumns = options.columns.map((column) => `${column.width ?? 160}px`).join(' ');
+  // Flatten state to primitives so ZRow memo comparison is fast and accurate
+  const focusedRow = state.focusedCell?.row ?? null;
+  const focusedCol = state.focusedCell?.col ?? null;
+  const selHasSelection = state.selection != null;
+  const selRowStart = state.selection?.range.start.row ?? 0;
+  const selRowEnd = state.selection?.range.end.row ?? 0;
+  const selColStart = state.selection?.range.start.col ?? 0;
+  const selColEnd = state.selection?.range.end.col ?? 0;
+  const editRow = state.editSession?.cell.row ?? null;
+  const editCol = state.editSession?.cell.col ?? null;
+  const editDraft = state.editSession?.draftValue;
 
   return (
     <section className={className} style={shellStyles}>
@@ -172,6 +357,30 @@ export function Grid<TRow>({ height = 520, className, ...options }: GridProps<TR
         onScroll={(event) => {
           grid.setViewport(bodyHeight, event.currentTarget.scrollTop);
         }}
+        onMouseDown={(e) => {
+          const cell = getCellFromEvent(e);
+          if (cell) {
+            grid.selectCell(cell.row, cell.col);
+            setIsDraggingSelection(true);
+          }
+        }}
+        onMouseMove={(e) => {
+          if (!isDraggingSelection) return;
+          const cell = getCellFromEvent(e);
+          if (!cell) return;
+          if (
+            lastHoveredCellRef.current?.row === cell.row &&
+            lastHoveredCellRef.current?.col === cell.col
+          ) {
+            return;
+          }
+          lastHoveredCellRef.current = cell;
+          grid.extendSelection(cell.row, cell.col);
+        }}
+        onDoubleClick={(e) => {
+          const cell = getCellFromEvent(e);
+          if (cell) grid.startEdit(cell.row, cell.col);
+        }}
         style={{
           position: 'relative',
           height: bodyHeight,
@@ -182,106 +391,26 @@ export function Grid<TRow>({ height = 520, className, ...options }: GridProps<TR
       >
         <div style={{ position: 'relative', height: state.viewport.totalHeight }}>
           <div style={{ transform: `translateY(${state.viewport.offsetTop}px)` }}>
-            {visibleRows.map((rowIndex) => {
-              return (
-                <div
-                  key={rowIndex}
-                  role="row"
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns,
-                    minHeight: options.rowHeight ?? 32,
-                    borderBottom: '1px solid rgba(15, 23, 42, 0.06)',
-                    background:
-                      rowIndex % 2 === 0 ? 'rgba(255, 255, 255, 0.54)' : 'rgba(250, 250, 247, 0.8)'
-                  }}
-                >
-                  {options.columns.map((column, colIndex) => {
-                    const cell = { row: rowIndex, col: colIndex };
-                    const value = grid.getCell(rowIndex, colIndex);
-                    const isFocused = isSameCell(cell, state.focusedCell);
-                    const isSelected = isCellInRange(cell, state.selection?.range);
-                    const isEditing = isSameCell(cell, state.editSession?.cell ?? null);
-
-                    return (
-                      <div
-                        key={`${rowIndex}-${column.id}`}
-                        role="gridcell"
-                        aria-selected={isSelected}
-                        data-row={rowIndex}
-                        data-col={colIndex}
-                        onMouseDown={() => {
-                          grid.selectCell(rowIndex, colIndex);
-                          setIsDraggingSelection(true);
-                        }}
-                        onMouseEnter={() => {
-                          if (isDraggingSelection) {
-                            grid.extendSelection(rowIndex, colIndex);
-                          }
-                        }}
-                        onDoubleClick={() => {
-                          grid.startEdit(rowIndex, colIndex);
-                        }}
-                        style={{
-                          position: 'relative',
-                          display: 'flex',
-                          alignItems: 'center',
-                          padding: '0 14px',
-                          minHeight: options.rowHeight ?? 32,
-                          fontSize: 14,
-                          color: '#111827',
-                          background: isSelected ? 'rgba(12, 116, 146, 0.12)' : 'transparent',
-                          boxShadow: isFocused ? 'inset 0 0 0 2px rgba(12, 116, 146, 0.9)' : 'none',
-                          userSelect: 'none'
-                        }}
-                      >
-                        {isEditing ? (
-                          column.kind === 'boolean' ? (
-                            <input
-                              autoFocus
-                              type="checkbox"
-                              checked={Boolean(state.editSession?.draftValue)}
-                              onChange={(event) => {
-                                grid.updateEditDraft(event.currentTarget.checked);
-                                grid.stopEdit();
-                              }}
-                            />
-                          ) : (
-                            <input
-                              autoFocus
-                              type={column.kind === 'number' ? 'number' : column.kind === 'date' ? 'date' : 'text'}
-                              value={formatValue(state.editSession?.draftValue, column.kind)}
-                              onChange={(event) => grid.updateEditDraft(event.currentTarget.value)}
-                              onBlur={() => grid.stopEdit()}
-                              onKeyDown={(event) => {
-                                if (event.key === 'Enter') {
-                                  event.preventDefault();
-                                  grid.stopEdit();
-                                }
-                                if (event.key === 'Escape') {
-                                  event.preventDefault();
-                                  grid.stopEdit('cancel');
-                                }
-                              }}
-                              style={{
-                                width: '100%',
-                                border: 'none',
-                                outline: 'none',
-                                background: 'rgba(255,255,255,0.9)',
-                                font: 'inherit',
-                                color: 'inherit'
-                              }}
-                            />
-                          )
-                        ) : (
-                          <span title={String(value ?? '')}>{formatValue(value, column.kind)}</span>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              );
-            })}
+            {visibleRows.map((rowIndex) => (
+              <ZRow
+                key={rowIndex}
+                rowIndex={rowIndex}
+                columns={options.columns}
+                gridTemplateColumns={gridTemplateColumns}
+                rowHeight={options.rowHeight ?? 32}
+                grid={grid}
+                focusedRow={focusedRow}
+                focusedCol={focusedCol}
+                selHasSelection={selHasSelection}
+                selRowStart={selRowStart}
+                selRowEnd={selRowEnd}
+                selColStart={selColStart}
+                selColEnd={selColEnd}
+                editRow={editRow}
+                editCol={editCol}
+                editDraft={editDraft}
+              />
+            ))}
           </div>
         </div>
       </div>
