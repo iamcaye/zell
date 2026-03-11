@@ -125,4 +125,39 @@ describe('Formula engine integration', () => {
     expect(grid.getCell(0, 2)).toBe(100);
     expect(grid.getCell(0, 3)).toBe(101);
   });
+
+  it('resolves references to non-root merged cells via merged root value', () => {
+    const grid = createGrid({
+      columns: [{ id: 'a' }, { id: 'b' }, { id: 'c' }],
+      data: [[0, 0, 0]]
+    });
+
+    grid.mergeCells({
+      start: { row: 0, col: 0 },
+      end: { row: 0, col: 1 }
+    });
+    grid.setCell(0, 0, 10);
+    grid.setFormula(0, 2, '=B1');
+
+    expect(grid.getCell(0, 2)).toBe(10);
+
+    grid.setCell(0, 0, 12);
+    expect(grid.getCell(0, 2)).toBe(12);
+  });
+
+  it('treats merged range references consistently in SUM', () => {
+    const grid = createGrid({
+      columns: [{ id: 'a' }, { id: 'b' }, { id: 'c' }],
+      data: [[0, 0, 0]]
+    });
+
+    grid.mergeCells({
+      start: { row: 0, col: 0 },
+      end: { row: 0, col: 1 }
+    });
+    grid.setCell(0, 0, 10);
+    grid.setFormula(0, 2, '=SUM(A1:B1)');
+
+    expect(grid.getCell(0, 2)).toBe(20);
+  });
 });

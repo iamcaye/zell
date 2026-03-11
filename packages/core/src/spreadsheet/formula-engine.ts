@@ -7,6 +7,11 @@ interface SheetAccessor {
   setCell(row: number, col: number, value: CellValue): void;
 }
 
+interface ResolvedCellAddress {
+  row: number;
+  col: number;
+}
+
 interface FormulaSheetState {
   formulas: Map<string, string>;
   dependenciesByFormula: Map<string, Set<string>>;
@@ -22,13 +27,18 @@ interface FormulaEngine {
   removeSheet(sheetId: SheetId): void;
 }
 
+type ResolveSheetCell = (sheetId: SheetId, row: number, col: number) => ResolvedCellAddress;
+
 const createEmptySheetState = (): FormulaSheetState => ({
   formulas: new Map(),
   dependenciesByFormula: new Map(),
   dependentsByCell: new Map()
 });
 
-export function createFormulaEngine(getSheetAccessor: (sheetId: SheetId) => SheetAccessor): FormulaEngine {
+export function createFormulaEngine(
+  getSheetAccessor: (sheetId: SheetId) => SheetAccessor,
+  resolveSheetCell: ResolveSheetCell = (_sheetId, row, col) => ({ row, col })
+): FormulaEngine {
   const sheets = new Map<SheetId, FormulaSheetState>();
 
   const getSheetState = (sheetId: SheetId): FormulaSheetState => {
@@ -43,6 +53,12 @@ export function createFormulaEngine(getSheetAccessor: (sheetId: SheetId) => Shee
   };
 
   const cellId = (row: number, col: number) => formatCellAddress({ row, col });
+
+  const normalizeReference = (sheetId: SheetId, reference: string): string => {
+    const address = parseCellAddress(reference);
+    const resolved = resolveSheetCell(sheetId, address.row, address.col);
+    return cellId(resolved.row, resolved.col);
+  };
 
   const setDependencies = (sheet: FormulaSheetState, formulaCell: string, dependencies: Set<string>) => {
     const previousDependencies = sheet.dependenciesByFormula.get(formulaCell);
@@ -117,6 +133,7 @@ export function createFormulaEngine(getSheetAccessor: (sheetId: SheetId) => Shee
   };
 
   const evaluateFormulaCell = (
+    sheetId: SheetId,
     sheet: FormulaSheetState,
     accessor: SheetAccessor,
     formulaCell: string,
@@ -143,11 +160,12 @@ export function createFormulaEngine(getSheetAccessor: (sheetId: SheetId) => Shee
     try {
       const value = evaluateFormula(formula, {
         getCellValue: (reference) => {
-          if (sheet.formulas.has(reference)) {
-            return evaluateFormulaCell(sheet, accessor, reference, stack, cache);
+          const normalizedReference = normalizeReference(sheetId, reference);
+          if (sheet.formulas.has(normalizedReference)) {
+            return evaluateFormulaCell(sheetId, sheet, accessor, normalizedReference, stack, cache);
           }
 
-          const { row, col } = parseCellAddress(reference);
+          const { row, col } = parseCellAddress(normalizedReference);
           return accessor.getCell(row, col);
         }
       });
@@ -169,17 +187,19 @@ export function createFormulaEngine(getSheetAccessor: (sheetId: SheetId) => Shee
     const orderedCells = Array.from(new Set(formulaCells)).sort((a, b) => a.localeCompare(b));
 
     for (const formulaCell of orderedCells) {
-      evaluateFormulaCell(sheet, accessor, formulaCell, stack, cache);
+      evaluateFormulaCell(sheetId, sheet, accessor, formulaCell, stack, cache);
     }
   };
 
   return {
     setFormula: (sheetId, row, col, formula) => {
       const sheet = getSheetState(sheetId);
-      const targetCell = cellId(row, col);
+      const targetCell = normalizeReference(sheetId, cellId(row, col));
       const previousFormula = sheet.formulas.get(targetCell);
       const previousDependencies = sheet.dependenciesByFormula.get(targetCell);
-      const nextDependencies = new Set(extractFormulaDependencies(formula));
+      const nextDependencies = new Set(
+        extractFormulaDependencies(formula).map((dependency) => normalizeReference(sheetId, dependency))
+      );
 
       sheet.formulas.set(targetCell, formula);
       setDependencies(sheet, targetCell, nextDependencies);
@@ -194,11 +214,11 @@ export function createFormulaEngine(getSheetAccessor: (sheetId: SheetId) => Shee
     },
     getFormula: (sheetId, row, col) => {
       const sheet = getSheetState(sheetId);
-      return sheet.formulas.get(cellId(row, col));
+      return sheet.formulas.get(normalizeReference(sheetId, cellId(row, col)));
     },
     clearFormula: (sheetId, row, col) => {
       const sheet = getSheetState(sheetId);
-      const targetCell = cellId(row, col);
+      const targetCell = normalizeReference(sheetId, cellId(row, col));
       const existingFormula = sheet.formulas.get(targetCell);
       if (existingFormula === undefined) {
         return;
@@ -210,7 +230,11 @@ export function createFormulaEngine(getSheetAccessor: (sheetId: SheetId) => Shee
     },
     handleCellEdit: (sheetId, row, col) => {
       const sheet = getSheetState(sheetId);
-      const affectedFormulaCells = collectAffectedFormulaCells(sheet, [cellId(row, col)], false);
+      const affectedFormulaCells = collectAffectedFormulaCells(
+        sheet,
+        [normalizeReference(sheetId, cellId(row, col))],
+        false
+      );
       recalculateFormulaCells(sheetId, affectedFormulaCells);
     },
     recalculate: (sheetId) => {

@@ -4,7 +4,9 @@ import { coerceValueByKind, isEditable } from './editing';
 import { GridEventEmitter } from './event-emitter';
 import { getNextCellFromKey, type GridKey } from './navigation';
 import { createFormulaEngine } from './spreadsheet/formula-engine';
+import { formatCellValue, type CellFormat } from './spreadsheet/formatting';
 import { createHistory } from './spreadsheet/history';
+import { createMergeRegistry, type MergeRegistry } from './spreadsheet/merged-cells';
 import { getAutofillChanges } from './spreadsheet/autofill';
 import { createSelectionModel, normalizeCell, normalizeRange } from './range';
 import { createWorkbook } from './spreadsheet/workbook';
@@ -149,9 +151,44 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
       getCell: (row, col) => dataSource.getCell(row, col) as CellValue,
       setCell: (row, col, value) => dataSource.setCell?.(row, col, value)
     };
+  }, (sheetId, row, col) => {
+    const root = getSheetMergeRegistry(sheetId).getMergeRoot(row, col);
+    return root ?? { row, col };
   });
   const history = createHistory();
   let isApplyingHistory = false;
+  const formatRegistryBySheet = new Map<string, Map<string, CellFormat>>();
+  const mergeRegistryBySheet = new Map<string, MergeRegistry>();
+
+  const toCellKey = (row: number, col: number) => `${row}:${col}`;
+
+  const getSheetFormatRegistry = (sheetId: string) => {
+    const existing = formatRegistryBySheet.get(sheetId);
+    if (existing) {
+      return existing;
+    }
+
+    const created = new Map<string, CellFormat>();
+    formatRegistryBySheet.set(sheetId, created);
+    return created;
+  };
+
+  const getSheetMergeRegistry = (sheetId: string) => {
+    const existing = mergeRegistryBySheet.get(sheetId);
+    if (existing) {
+      return existing;
+    }
+
+    const created = createMergeRegistry();
+    mergeRegistryBySheet.set(sheetId, created);
+    return created;
+  };
+
+  const resolveMergedCell = (row: number, col: number) => {
+    const activeSheetId = workbook.getActiveSheet().id;
+    const root = getSheetMergeRegistry(activeSheetId).getMergeRoot(row, col);
+    return root ?? { row, col };
+  };
 
   const runHistoryAction = (action: () => boolean) => {
     isApplyingHistory = true;
@@ -238,7 +275,8 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
 
   const getCell = (row: number, col: number) => {
     ensureActive();
-    return getActiveDataSource().getCell(row, col) as CellValue;
+    const resolvedCell = resolveMergedCell(row, col);
+    return getActiveDataSource().getCell(resolvedCell.row, resolvedCell.col) as CellValue;
   };
 
   const applyLiteralCell = (row: number, col: number, value: CellValue) => {
@@ -261,33 +299,36 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
 
   const setCell = (row: number, col: number, value: CellValue) => {
     ensureActive();
-    const previousValue = getCell(row, col);
-    const previousFormula = getFormula(row, col);
+    const targetCell = resolveMergedCell(row, col);
+    const previousValue = getCell(targetCell.row, targetCell.col);
+    const previousFormula = getFormula(targetCell.row, targetCell.col);
 
-    applyLiteralCell(row, col, value);
+    applyLiteralCell(targetCell.row, targetCell.col, value);
 
     if (isApplyingHistory) {
       return;
     }
 
     history.push({
-      undo: () => restoreCell(row, col, previousValue, previousFormula),
-      redo: () => applyLiteralCell(row, col, value)
+      undo: () => restoreCell(targetCell.row, targetCell.col, previousValue, previousFormula),
+      redo: () => applyLiteralCell(targetCell.row, targetCell.col, value)
     });
   };
 
   const setFormula = (row: number, col: number, formula: string) => {
     ensureActive();
+    const targetCell = resolveMergedCell(row, col);
     const activeSheetId = workbook.getActiveSheet().id;
-    formulaEngine.setFormula(activeSheetId, row, col, formula);
+    formulaEngine.setFormula(activeSheetId, targetCell.row, targetCell.col, formula);
     const activeDataSource = getActiveDataSource();
     setState(syncViewport({ rowCount: activeDataSource.getRowCount() }));
   };
 
   const getFormula = (row: number, col: number) => {
     ensureActive();
+    const targetCell = resolveMergedCell(row, col);
     const activeSheetId = workbook.getActiveSheet().id;
-    return formulaEngine.getFormula(activeSheetId, row, col);
+    return formulaEngine.getFormula(activeSheetId, targetCell.row, targetCell.col);
   };
 
   const recalculate = () => {
@@ -338,8 +379,51 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
     ensureActive();
     workbook.removeSheet(sheetId);
     formulaEngine.removeSheet(sheetId);
+    formatRegistryBySheet.delete(sheetId);
+    mergeRegistryBySheet.delete(sheetId);
     const activeDataSource = getActiveDataSource();
     setState(syncViewport({ rowCount: activeDataSource.getRowCount() }));
+  };
+
+  const setCellFormat = (row: number, col: number, format: CellFormat | undefined) => {
+    ensureActive();
+    const activeSheetId = workbook.getActiveSheet().id;
+    const resolvedCell = resolveMergedCell(row, col);
+    const key = toCellKey(resolvedCell.row, resolvedCell.col);
+    const formatRegistry = getSheetFormatRegistry(activeSheetId);
+
+    if (format === undefined) {
+      formatRegistry.delete(key);
+      return;
+    }
+
+    formatRegistry.set(key, format);
+  };
+
+  const getCellFormat = (row: number, col: number) => {
+    ensureActive();
+    const activeSheetId = workbook.getActiveSheet().id;
+    const resolvedCell = resolveMergedCell(row, col);
+    return getSheetFormatRegistry(activeSheetId).get(toCellKey(resolvedCell.row, resolvedCell.col));
+  };
+
+  const formatCell = (row: number, col: number) => {
+    ensureActive();
+    return formatCellValue(getCell(row, col), getCellFormat(row, col));
+  };
+
+  const mergeCells = (range: CellRange) => {
+    ensureActive();
+    const activeSheetId = workbook.getActiveSheet().id;
+    const normalizedRange = normalizeRange(range, state.rowCount, state.columnCount);
+    getSheetMergeRegistry(activeSheetId).merge(normalizedRange);
+  };
+
+  const unmergeCells = (range: CellRange) => {
+    ensureActive();
+    const activeSheetId = workbook.getActiveSheet().id;
+    const normalizedRange = normalizeRange(range, state.rowCount, state.columnCount);
+    getSheetMergeRegistry(activeSheetId).unmerge(normalizedRange);
   };
 
   const startEdit = (row: number, col: number, nextValue?: CellValue): EditSession => {
@@ -687,6 +771,11 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
     setFormula,
     getFormula,
     recalculate,
+    setCellFormat,
+    getCellFormat,
+    formatCell,
+    mergeCells,
+    unmergeCells,
     undo,
     redo,
     canUndo,

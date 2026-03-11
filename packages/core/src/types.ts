@@ -1,3 +1,4 @@
+import type { CellFormat } from './spreadsheet/formatting';
 import type {
   CellAddress,
   CellRangeAddress,
@@ -175,6 +176,11 @@ export interface GridInstance<TRow = unknown> {
   setFormula(row: number, col: number, formula: string): void;
   getFormula(row: number, col: number): string | undefined;
   recalculate(): void;
+  setCellFormat(row: number, col: number, format: CellFormat | undefined): void;
+  getCellFormat(row: number, col: number): CellFormat | undefined;
+  formatCell(row: number, col: number): string;
+  mergeCells(range: CellRange): void;
+  unmergeCells(range: CellRange): void;
   undo(): boolean;
   redo(): boolean;
   canUndo(): boolean;
@@ -186,6 +192,7 @@ export interface GridInstance<TRow = unknown> {
 
 export type {
   CellAddress,
+  CellFormat,
   CellRangeAddress,
   FormulaBinaryOperator,
   FormulaEvaluationOptions,
