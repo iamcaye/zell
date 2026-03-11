@@ -254,7 +254,7 @@ export function Grid<TRow>({ height = 520, className, ...options }: GridProps<TR
   }, [state.viewport.rowEnd, state.viewport.rowStart]);
 
   const gridTemplateColumns = useMemo(
-    () => options.columns.map((column) => `${column.width ?? 160}px`).join(' '),
+    () => options.columns.map((column) => `minmax(${column.width ?? 160}px, 1fr)`).join(' '),
     [options.columns]
   );
 
