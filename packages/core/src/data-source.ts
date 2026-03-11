@@ -22,7 +22,9 @@ export function createDataSource<TRow>(data: GridData<TRow>, columns: Array<Colu
   if (data.length === 0) {
     return {
       getRowCount: () => 0,
-      getCell: () => undefined
+      getCell: () => undefined,
+      insertRows: () => {},
+      removeRows: () => {}
     };
   }
 
@@ -38,6 +40,18 @@ export function createDataSource<TRow>(data: GridData<TRow>, columns: Array<Colu
           return;
         }
         targetRow[col] = value;
+      },
+      insertRows: (startRow, count) => {
+        const safeStart = Math.max(0, Math.min(startRow, matrix.length));
+        const width = columns.length || matrix[0]?.length || 0;
+        const nextRows = Array.from({ length: Math.max(0, count) }, () =>
+          Array.from({ length: width }, () => undefined)
+        );
+        matrix.splice(safeStart, 0, ...nextRows);
+      },
+      removeRows: (startRow, count) => {
+        const safeStart = Math.max(0, Math.min(startRow, matrix.length));
+        matrix.splice(safeStart, Math.max(0, count));
       },
       updateRow: (row, nextRow) => {
         matrix[row] = nextRow as unknown as CellValue[];

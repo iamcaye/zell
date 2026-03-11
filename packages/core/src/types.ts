@@ -76,6 +76,8 @@ export interface DataSource<TRow = unknown> {
   getRow?(row: number): TRow | undefined;
   getCell(row: number, col: number): CellValue;
   setCell?(row: number, col: number, value: CellValue): void;
+  insertRows?(startRow: number, count: number): void;
+  removeRows?(startRow: number, count: number): void;
   updateRow?(row: number, nextRow: TRow): void;
 }
 
@@ -168,9 +170,14 @@ export interface GridInstance<TRow = unknown> {
   removeSheet(sheetId: SheetId): void;
   getCell(row: number, col: number): CellValue;
   setCell(row: number, col: number, value: CellValue): void;
+  insertRows(startRow: number, count?: number): void;
   setFormula(row: number, col: number, formula: string): void;
   getFormula(row: number, col: number): string | undefined;
   recalculate(): void;
+  undo(): boolean;
+  redo(): boolean;
+  canUndo(): boolean;
+  canRedo(): boolean;
   updateRow(row: number, nextRow: TRow): void;
   use(plugin: GridPlugin<TRow>): void;
   destroy(): void;

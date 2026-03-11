@@ -9,6 +9,8 @@ export interface SheetDataSource<TRow = unknown> {
   getRowCount(): number;
   getCell(row: number, col: number): unknown;
   setCell?(row: number, col: number, value: unknown): void;
+  insertRows?(startRow: number, count: number): void;
+  removeRows?(startRow: number, count: number): void;
   updateRow?(row: number, nextRow: TRow): void;
 }
 

@@ -4,6 +4,7 @@ import { coerceValueByKind, isEditable } from './editing';
 import { GridEventEmitter } from './event-emitter';
 import { getNextCellFromKey, type GridKey } from './navigation';
 import { createFormulaEngine } from './spreadsheet/formula-engine';
+import { createHistory } from './spreadsheet/history';
 import { createSelectionModel, normalizeCell, normalizeRange } from './range';
 import { createWorkbook } from './spreadsheet/workbook';
 import { extendSelection as extendSelectionFromAnchor } from './selection';
@@ -74,6 +75,17 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
           return;
         }
         targetRow[col] = value;
+      },
+      insertRows: (startRow, count) => {
+        const safeStart = Math.max(0, Math.min(startRow, matrix.length));
+        const nextRows = Array.from({ length: Math.max(0, count) }, () =>
+          Array.from({ length: columnCount }, () => undefined)
+        );
+        matrix.splice(safeStart, 0, ...nextRows);
+      },
+      removeRows: (startRow, count) => {
+        const safeStart = Math.max(0, Math.min(startRow, matrix.length));
+        matrix.splice(safeStart, Math.max(0, count));
       }
     };
   };
@@ -137,6 +149,17 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
       setCell: (row, col, value) => dataSource.setCell?.(row, col, value)
     };
   });
+  const history = createHistory();
+  let isApplyingHistory = false;
+
+  const runHistoryAction = (action: () => boolean) => {
+    isApplyingHistory = true;
+    try {
+      return action();
+    } finally {
+      isApplyingHistory = false;
+    }
+  };
 
   const ensureRowVisible = (row: number) => {
     const rowTop = row * resolvedOptions.rowHeight;
@@ -217,14 +240,39 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
     return getActiveDataSource().getCell(row, col) as CellValue;
   };
 
-  const setCell = (row: number, col: number, value: CellValue) => {
-    ensureActive();
+  const applyLiteralCell = (row: number, col: number, value: CellValue) => {
     const activeSheetId = workbook.getActiveSheet().id;
     const activeDataSource = getActiveDataSource();
     formulaEngine.clearFormula(activeSheetId, row, col);
     activeDataSource.setCell?.(row, col, value);
     formulaEngine.handleCellEdit(activeSheetId, row, col);
     setState(syncViewport({ rowCount: activeDataSource.getRowCount() }));
+  };
+
+  const restoreCell = (row: number, col: number, value: CellValue, formula?: string) => {
+    if (typeof formula === 'string') {
+      setFormula(row, col, formula);
+      return;
+    }
+
+    applyLiteralCell(row, col, value);
+  };
+
+  const setCell = (row: number, col: number, value: CellValue) => {
+    ensureActive();
+    const previousValue = getCell(row, col);
+    const previousFormula = getFormula(row, col);
+
+    applyLiteralCell(row, col, value);
+
+    if (isApplyingHistory) {
+      return;
+    }
+
+    history.push({
+      undo: () => restoreCell(row, col, previousValue, previousFormula),
+      redo: () => applyLiteralCell(row, col, value)
+    });
   };
 
   const setFormula = (row: number, col: number, formula: string) => {
@@ -402,6 +450,14 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
       return { start, end: start };
     }
 
+    const changes: Array<{
+      row: number;
+      col: number;
+      previousValue: CellValue;
+      previousFormula?: string;
+      nextValue: CellValue;
+    }> = [];
+
     for (let rowOffset = 0; rowOffset < parsed.length; rowOffset += 1) {
       const row = parsed[rowOffset];
       if (!row) {
@@ -416,8 +472,34 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
         }
 
         const value = coerceValueByKind(column.kind, row[colOffset]);
-        setCell(start.row + rowOffset, columnIndex, value);
+        const nextRow = start.row + rowOffset;
+        changes.push({
+          row: nextRow,
+          col: columnIndex,
+          previousValue: getCell(nextRow, columnIndex),
+          previousFormula: getFormula(nextRow, columnIndex),
+          nextValue: value
+        });
       }
+    }
+
+    for (const change of changes) {
+      applyLiteralCell(change.row, change.col, change.nextValue);
+    }
+
+    if (!isApplyingHistory && changes.length > 0) {
+      history.push({
+        undo: () => {
+          for (const change of changes) {
+            restoreCell(change.row, change.col, change.previousValue, change.previousFormula);
+          }
+        },
+        redo: () => {
+          for (const change of changes) {
+            applyLiteralCell(change.row, change.col, change.nextValue);
+          }
+        }
+      });
     }
 
     const range = normalizeRange(
@@ -439,6 +521,42 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
     eventEmitter.emit('paste', { target: start, values, raw: text });
     return range;
   };
+
+  const insertRows = (startRow: number, count = 1) => {
+    ensureActive();
+    const rowCount = Math.max(0, Math.trunc(count));
+    if (rowCount === 0) {
+      return;
+    }
+
+    const activeDataSource = getActiveDataSource();
+    if (!activeDataSource.insertRows || !activeDataSource.removeRows) {
+      throw new Error('Active sheet data source does not support row insertion');
+    }
+
+    activeDataSource.insertRows(startRow, rowCount);
+    setState(syncViewport({ rowCount: activeDataSource.getRowCount() }));
+
+    if (isApplyingHistory) {
+      return;
+    }
+
+    history.push({
+      undo: () => {
+        activeDataSource.removeRows?.(startRow, rowCount);
+        setState(syncViewport({ rowCount: activeDataSource.getRowCount() }));
+      },
+      redo: () => {
+        activeDataSource.insertRows?.(startRow, rowCount);
+        setState(syncViewport({ rowCount: activeDataSource.getRowCount() }));
+      }
+    });
+  };
+
+  const undo = () => runHistoryAction(() => history.undo());
+  const redo = () => runHistoryAction(() => history.redo());
+  const canUndo = () => history.canUndo();
+  const canRedo = () => history.canRedo();
 
   const setViewport = (viewportHeight: number, scrollTop: number) => {
     ensureActive();
@@ -519,9 +637,14 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
     removeSheet,
     getCell,
     setCell,
+    insertRows,
     setFormula,
     getFormula,
     recalculate,
+    undo,
+    redo,
+    canUndo,
+    canRedo,
     updateRow,
     use,
     destroy: () => {
