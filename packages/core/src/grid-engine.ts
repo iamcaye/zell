@@ -4,6 +4,7 @@ import { coerceValueByKind, isEditable } from './editing';
 import { GridEventEmitter } from './event-emitter';
 import { getNextCellFromKey, type GridKey } from './navigation';
 import { createSelectionModel, normalizeCell, normalizeRange } from './range';
+import { createWorkbook } from './spreadsheet/workbook';
 import { extendSelection as extendSelectionFromAnchor } from './selection';
 import { calculateVirtualViewport, createViewport } from './viewport';
 import type {
@@ -30,7 +31,8 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
     editable: options.editable ?? true
   };
 
-  const dataSource = createDataSource(options.data, options.columns);
+  const initialDataSource = createDataSource(options.data, options.columns);
+  const workbook = createWorkbook<TRow>({ initialSheetDataSource: initialDataSource });
   const eventEmitter = new GridEventEmitter();
   const subscribers = new Set<() => void>();
   let destroyed = false;
@@ -39,15 +41,46 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
     eventEmitter.on(eventName as GridEventName, handler as never);
   }
 
+  const getActiveDataSource = () => {
+    const activeDataSource = workbook.getActiveSheet().dataSource;
+    if (!activeDataSource) {
+      throw new Error('Active sheet data source is not available');
+    }
+
+    return activeDataSource;
+  };
+
+  const createEmptySheetDataSource = (rowCount: number, columnCount: number): DataSource<TRow> => {
+    const matrix: CellValue[][] = Array.from({ length: rowCount }, () =>
+      Array.from({ length: columnCount }, () => undefined)
+    );
+
+    return {
+      getRowCount: () => matrix.length,
+      getCell: (row, col) => matrix[row]?.[col],
+      setCell: (row, col, value) => {
+        const targetRow = matrix[row];
+        if (!targetRow) {
+          return;
+        }
+        targetRow[col] = value;
+      }
+    };
+  };
+
   let state: GridState = {
-    rowCount: dataSource.getRowCount(),
+    rowCount: getActiveDataSource().getRowCount(),
     columnCount: options.columns.length,
     focusedCell: null,
     selection: null,
     editSession: null,
     scrollTop: 0,
     viewportHeight: resolvedOptions.rowHeight * 10,
-    viewport: createViewport(dataSource.getRowCount(), resolvedOptions.rowHeight, resolvedOptions.overscan)
+    viewport: createViewport(
+      getActiveDataSource().getRowCount(),
+      resolvedOptions.rowHeight,
+      resolvedOptions.overscan
+    )
   };
 
   const notify = () => {
@@ -163,19 +196,57 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
 
   const getCell = (row: number, col: number) => {
     ensureActive();
-    return dataSource.getCell(row, col);
+    return getActiveDataSource().getCell(row, col) as CellValue;
   };
 
   const setCell = (row: number, col: number, value: CellValue) => {
     ensureActive();
-    dataSource.setCell?.(row, col, value);
-    setState(syncViewport({ rowCount: dataSource.getRowCount() }));
+    const activeDataSource = getActiveDataSource();
+    activeDataSource.setCell?.(row, col, value);
+    setState(syncViewport({ rowCount: activeDataSource.getRowCount() }));
   };
 
   const updateRow = (row: number, nextRow: TRow) => {
     ensureActive();
-    dataSource.updateRow?.(row, nextRow);
-    setState(syncViewport({ rowCount: dataSource.getRowCount() }));
+    const activeDataSource = getActiveDataSource();
+    activeDataSource.updateRow?.(row, nextRow);
+    setState(syncViewport({ rowCount: activeDataSource.getRowCount() }));
+  };
+
+  const addSheet = (name?: string) => {
+    ensureActive();
+    const rowCount = state.rowCount;
+    return workbook.addSheet(name, createEmptySheetDataSource(rowCount, state.columnCount));
+  };
+
+  const setActiveSheet = (sheetId: string) => {
+    ensureActive();
+    workbook.setActiveSheet(sheetId);
+    const activeSheet = workbook.getActiveSheet();
+    const activeDataSource = activeSheet.dataSource;
+    setState(
+      syncViewport({
+        rowCount: activeDataSource?.getRowCount() ?? 0
+      })
+    );
+    return activeSheet;
+  };
+
+  const getActiveSheet = () => {
+    ensureActive();
+    return workbook.getActiveSheet();
+  };
+
+  const getSheets = () => {
+    ensureActive();
+    return workbook.getSheets();
+  };
+
+  const removeSheet = (sheetId: string) => {
+    ensureActive();
+    workbook.removeSheet(sheetId);
+    const activeDataSource = getActiveDataSource();
+    setState(syncViewport({ rowCount: activeDataSource.getRowCount() }));
   };
 
   const startEdit = (row: number, col: number, nextValue?: CellValue): EditSession => {
@@ -397,6 +468,11 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
     startEdit,
     stopEdit,
     scrollTo,
+    addSheet,
+    setActiveSheet,
+    getActiveSheet,
+    getSheets,
+    removeSheet,
     getCell,
     setCell,
     updateRow,
@@ -416,5 +492,10 @@ export function createGrid<TRow>(options: GridOptions<TRow>): GridInstance<TRow>
 }
 
 export function getGridDataSource<TRow>(grid: GridInstance<TRow>): DataSource<TRow> {
-  return createDataSource(grid.options.data, grid.options.columns);
+  const activeDataSource = grid.getActiveSheet().dataSource;
+  if (!activeDataSource) {
+    return createDataSource(grid.options.data, grid.options.columns);
+  }
+
+  return activeDataSource as DataSource<TRow>;
 }

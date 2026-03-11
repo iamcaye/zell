@@ -1,3 +1,5 @@
+import type { SheetId, SheetModel, SpreadsheetCell, WorkbookModel } from './spreadsheet/types';
+
 export type CellValue = string | number | boolean | Date | null | undefined;
 
 export type ColumnKind = 'text' | 'number' | 'date' | 'boolean';
@@ -150,9 +152,16 @@ export interface GridInstance<TRow = unknown> {
   startEdit(row: number, col: number, nextValue?: CellValue): EditSession;
   stopEdit(mode?: 'commit' | 'cancel', nextValue?: CellValue): void;
   scrollTo(row: number): number;
+  addSheet(name?: string): SheetId;
+  setActiveSheet(sheetId: SheetId): Readonly<SheetModel<TRow>>;
+  getActiveSheet(): Readonly<SheetModel<TRow>>;
+  getSheets(): ReadonlyArray<Readonly<SheetModel<TRow>>>;
+  removeSheet(sheetId: SheetId): void;
   getCell(row: number, col: number): CellValue;
   setCell(row: number, col: number, value: CellValue): void;
   updateRow(row: number, nextRow: TRow): void;
   use(plugin: GridPlugin<TRow>): void;
   destroy(): void;
 }
+
+export type { SheetId, SheetModel, SpreadsheetCell, WorkbookModel };
